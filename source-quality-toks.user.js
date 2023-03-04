@@ -4,8 +4,8 @@
 // @description  Replaces toks with source quality originals from tikwm.com when available. Press E to play toks if autoplay doesn't work.
 // @author       (You)
 // @downloadURL  https://raw.githubusercontent.com/meowmin/source-quality-toks/main/source-quality-toks.user.js
-// @match        https://sturdychan.help/tv/*
 // @match        https://nekochen.net/tt/*
+// @match        https://sturdychan.help/tv/*
 // @grant        none
 // ==/UserScript==
 (function () {
@@ -110,7 +110,6 @@
         if (hoveredTokID == null) {
             return;
         }
-        console.log(checkedTokIDs);
         let tikwmURL = checkedTokIDs.get(hoveredTokID);
         if (tikwmURL instanceof Promise) {
             setStatusIndicatorColor("yellow");
