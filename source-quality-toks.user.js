@@ -6,8 +6,6 @@
 // @downloadURL  https://raw.githubusercontent.com/meowmin/source-quality-toks/main/source-quality-toks.user.js
 // @match        https://nekochen.net/tt/*
 // @match        https://sturdychan.help/tv/*
-// @grant        GM_setValue
-// @grant        GM_getValue
 // ==/UserScript==
 
 (function () {
@@ -17,21 +15,8 @@
     let checkedTokIDs = new Map();
     let fetchedTokIDs = new Map();
 
-
-    function saveCheckedToks(){
-        let entries = checkedTokIDs.entries();
-        let array = Array.from(entries);
-        GM_setValue("checkedToks", array)
-    }
     function addCheckedTokEntry(tokID, value) {
         checkedTokIDs.set(tokID, value);
-    }
-
-    function loadCheckedToks() {
-        let array = GM_getValue("checkedToks", []);
-        let map = new Map(array);
-        console.log(map);
-        return map;
     }
 
     function fetchSourceURL(id) {
@@ -270,7 +255,6 @@
         let tokName = tokLink.getAttribute("download");
         let tokID = getTokID(tokName);
         checkedTokIDs.delete(tokID)
-        saveCheckedToks()
     }
 
     let threads = document.getElementById("threads");
