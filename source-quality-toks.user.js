@@ -294,7 +294,7 @@
     infoPanel.setAttribute('id', 'SQT-info');
     infoPanel.setAttribute('class', 'modal glass');
     infoPanel.setAttribute('style', 'display: block;');
-    infoPanel.textContent = 'Press E to play videos if stuck, A and D to rotate videos';
+    infoPanel.textContent = 'Press E to play videos if stuck';
     statusIndicator.onclick = () => {
         let info = document.getElementById("SQT-info");
         if (info == null) {
