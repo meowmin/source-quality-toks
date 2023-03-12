@@ -6,14 +6,70 @@
 // @downloadURL  https://raw.githubusercontent.com/meowmin/source-quality-toks/main/source-quality-toks.user.js
 // @match        https://nekochen.net/tt/*
 // @match        https://sturdychan.help/tv/*
-// @grant        none
+// @grant        GM_setValue
+// @grant        GM_getValue
 // ==/UserScript==
+
 (function () {
     'use strict';
     let lastHovered = null;
-    let hoveredTokID = null;
-
+    let currentTokID = null;
     let checkedTokIDs = new Map();
+    let fetchedTokIDs = new Map();
+
+
+    function saveCheckedToks(){
+        let entries = checkedTokIDs.entries();
+        let array = Array.from(entries);
+        GM_setValue("checkedToks", array)
+    }
+    function addCheckedTokEntry(tokID, value) {
+        checkedTokIDs.set(tokID, value);
+    }
+
+    function loadCheckedToks() {
+        let array = GM_getValue("checkedToks", []);
+        let map = new Map(array);
+        console.log(map);
+        return map;
+    }
+
+    function fetchSourceURL(id) {
+        if (fetchedTokIDs.has(id) || checkedTokIDs.has(id))
+            return;
+        try {
+            let tikwmURL = fetch("https://tikwm.com/video/media/hdplay/" + id + ".mp4");
+            fetchedTokIDs.set(id, tikwmURL);
+            tikwmURL
+                .then((resp) => {
+                    addCheckedTokEntry(id, resp.url);
+                })
+                .catch((e) => {
+                    addCheckedTokEntry(id, null);
+                })
+                .finally(() => {
+                    fetchedTokIDs.delete(id);
+                });
+        } catch (err) {
+            addCheckedTokEntry(id, null);
+            fetchedTokIDs.delete(id);
+        }
+    }
+
+    async function getSourceURL(id, loadingCallback = null) {
+        if (fetchedTokIDs.has(id)) {
+            if (loadingCallback != null)
+                loadingCallback();
+            try {
+                let resp = await fetchedTokIDs.get(id);
+                return resp.url;
+            } catch (e) {
+                return null;
+            }
+        } else {
+            return checkedTokIDs.get(id);
+        }
+    }
 
     function getTokID(filename) {
         const now = new Date();
@@ -54,8 +110,17 @@
             return;
         }
         lastHovered = target;
-        hoveredTokID = null;
+        currentTokID = null;
         let article = target.closest("article");
+        fetchSourceFromArticle(article)
+    }
+
+    function handleSource404(element, tokID, originalURL) {
+        element.src = originalURL;
+        addCheckedTokEntry(tokID, null);
+    }
+
+    function fetchSourceFromArticle(article) {
         let tokLink = article.querySelector("figcaption a[download]");
         if (tokLink == null) {
             return;
@@ -71,30 +136,18 @@
         let tokName = tokLink.getAttribute("download");
         let tokID = getTokID(tokName);
         if (tokID != null) {
-            hoveredTokID = tokID;
-            if (!checkedTokIDs.has(tokID)) {
-                try {
-                    let tikwmURL = fetch("https://tikwm.com/video/media/hdplay/" + tokID + ".mp4");
-                    checkedTokIDs.set(tokID, tikwmURL);
-                    tikwmURL.then((resp) => {
-                            checkedTokIDs.set(tokID, resp.url);
-                        })
-                        .catch((e) => {
-                            checkedTokIDs.set(tokID, null);
-                        });
-                } catch (err) {
-                    checkedTokIDs.set(tokID, null);
-                }
-            }
+            currentTokID = tokID;
+            fetchSourceURL(tokID);
         } else {
-            hoveredTokID = null;
+            currentTokID = null;
         }
     }
 
     function setStatusIndicatorColor(color) {
         statusIndicator.style.color = color;
     }
-    async function overlayMutationObserver(mutation) {
+
+    async function hoverPlayerObserver(mutation) {
         if (mutation[0].removedNodes.length > 0) {
             setStatusIndicatorColor("gray");
         }
@@ -102,41 +155,33 @@
             return;
         }
         let video = mutation[0].addedNodes[0];
-        if (video.tagName != "VIDEO" || hoveredTokID == null) {
+        if (video.tagName != "VIDEO" || currentTokID == null) {
+            return;
+        }
+        if (currentTokID == null) {
             return;
         }
         let oldSrc = video.src;
         video.removeAttribute("src");
-        if (hoveredTokID == null) {
+        let sourceURL = await getSourceURL(currentTokID, () => {
+            setStatusIndicatorColor("yellow");
+        });
+        if (!video.isConnected) {
             return;
         }
-        let tikwmURL = checkedTokIDs.get(hoveredTokID);
-        if (tikwmURL instanceof Promise) {
-            setStatusIndicatorColor("yellow");
-            try {
-                let resp = await tikwmURL;
-                if (video.isConnected) {
-                    video.setAttribute("src", resp.url);
-                    setStatusIndicatorColor("lime");
-                }
-            } catch (e) {
-                if (video.isConnected) {
-                    video.setAttribute("src", oldSrc);
-                    setStatusIndicatorColor("gray");
-                }
-            }
+        if (sourceURL == null) {
+            video.src = oldSrc;
+            setStatusIndicatorColor("gray");
         } else {
-            if (tikwmURL != null) {
-                video.setAttribute("src", tikwmURL);
-                setStatusIndicatorColor("lime");
-            } else {
-                video.setAttribute("src", oldSrc);
-                setStatusIndicatorColor("gray");
+            video.src = sourceURL;
+            video.onerror = () => {
+                handleSource404(video, currentTokID, oldSrc)
             }
+            setStatusIndicatorColor("lime");
         }
     }
 
-    async function postExpansionObserver(mutations) {
+    async function expansionPlayerObserver(mutations) {
         //iterate over mutations and find an index where target has tag "FIGURE"
         for (let i = 0; i < mutations.length; i++) {
             if (mutations[i].target.tagName === "FIGURE") {
@@ -145,60 +190,137 @@
                 }
                 let video = mutations[i].addedNodes[0];
                 if (video.matches("video.expanded")) {
+                    fetchSourceFromArticle(video.closest("article"))
                     let oldSrc = video.src;
                     video.removeAttribute("src")
-                    let tikwmURL = checkedTokIDs.get(hoveredTokID);
-                    if (tikwmURL instanceof Promise) {
-                        try {
-                            let resp = await tikwmURL;
-                            if (video.isConnected) {
-                                video.setAttribute("src", resp.url);
-                            }
-                        } catch (e) {
-                            if (video.isConnected) {
-                                video.setAttribute("src", oldSrc);
-                            }
-                        }
+                    let sourceURL = await getSourceURL(currentTokID);
+                    if (!video.isConnected) {
+                        return;
+                    }
+                    if (sourceURL == null) {
+                        video.src = oldSrc;
                     } else {
-                        if (tikwmURL != null) {
-                            video.setAttribute("src", tikwmURL);
-                        } else {
-                            video.setAttribute("src", oldSrc);
+                        video.src = sourceURL;
+                        video.onerror = () => {
+                            handleSource404(video, currentTokID, oldSrc)
                         }
                     }
                 }
             }
         }
     }
+
+    let rotations = [
+        {name: "0", transform: "none", maxHeight: "100%", maxWidth: "100%"},
+        {name: "-90", transform: "rotate(-90deg)", maxHeight: "100vw", maxWidth: "calc(100vh - 1.5em)"},
+        {name: "180", transform: "rotate(180deg)", maxHeight: "100%", maxWidth: "100%"},
+        {name: "90", transform: "rotate(90deg)", maxHeight: "100vw", maxWidth: "calc(100vh - 1.5em)"},
+    ]
+
+    function rotateTokCW() {
+        let video = document.querySelector("#hover-overlay > *");
+        if (video == null) {
+            return;
+        }
+        let rotation = "0";
+        if ("rotation" in video.dataset) {
+            rotation = video.dataset.rotation;
+        }
+        let index = rotations.findIndex((rot) => rot.name == rotation);
+        let nextIndex = (index - 1 + rotations.length) % rotations.length;
+        video.dataset.rotation = rotations[nextIndex].name;
+        video.style.transform = rotations[nextIndex].transform;
+        video.style.maxHeight = rotations[nextIndex].maxHeight;
+        video.style.maxWidth = rotations[nextIndex].maxWidth;
+    }
+
+    function rotateTokCCW() {
+        let video = document.querySelector("#hover-overlay > *");
+        if (video == null) {
+            return;
+        }
+        let rotation = "0";
+        if ("rotation" in video.dataset) {
+            rotation = video.dataset.rotation;
+        }
+        let index = rotations.findIndex((rot) => rot.name == rotation);
+        let nextIndex = (index + 1) % rotations.length;
+        video.dataset.rotation = rotations[nextIndex].name;
+        video.style.transform = rotations[nextIndex].transform;
+        video.style.maxHeight = rotations[nextIndex].maxHeight;
+        video.style.maxWidth = rotations[nextIndex].maxWidth;
+    }
+
+    function resetCurrentTok(){
+        let article = document.querySelector("article:hover");
+        if(article == null)
+            return
+        let tokLink = article.querySelector("figcaption a[download]");
+        if (tokLink == null) {
+            return;
+        }
+        if (!(tokLink.href.endsWith(".mp4") || tokLink.href.endsWith(".webm"))) {
+            return;
+        }
+        //Check if file is already HEVC
+        let codec = article.querySelector(".fileinfo > span:last-child");
+        if (codec != null && codec.innerText == "HEVC") {
+            return;
+        }
+        let tokName = tokLink.getAttribute("download");
+        let tokID = getTokID(tokName);
+        checkedTokIDs.delete(tokID)
+        saveCheckedToks()
+    }
+
     let threads = document.getElementById("threads");
-    let threadsObserver = new MutationObserver(postExpansionObserver);
+    let threadsObserver = new MutationObserver(expansionPlayerObserver);
     threadsObserver.observe(threads, {
         childList: true,
         attributes: false,
         subtree: true
     });
-    let overlayMutObserver = new MutationObserver(overlayMutationObserver);
+    let overlayMutObserver = new MutationObserver(hoverPlayerObserver);
     let overlay = document.getElementById("hover-overlay")
-    if (overlay != null) {
-        overlayMutObserver.observe(overlay, {
-            childList: true,
-            attributes: false,
-            subtree: false
-        });
-    }
+    overlayMutObserver.observe(overlay, {
+        childList: true,
+        attributes: false,
+        subtree: false
+    });
     document.addEventListener("mousemove", onThumbnailHover, {
         passive: true,
     })
     document.addEventListener('keydown', function (event) {
+        let inInput = 'selectionStart' in event.target
+        if (inInput)
+            return;
         if (event.code === 'KeyE') {
             let video = document.querySelector("#hover-overlay > video");
             if (video != null) {
                 video.play();
             }
-        }
+        }urrentTok();
+        // }
     });
-    let statusIndicator = document.createElement("b");
+    let statusIndicator = document.createElement("a");
     statusIndicator.innerText = "SQ";
     setStatusIndicatorColor("gray");
     document.getElementById("thread-post-counters").after(statusIndicator);
+    let infoPanel = document.createElement('div');
+    infoPanel.setAttribute('id', 'SQT-info');
+    infoPanel.setAttribute('class', 'modal glass');
+    infoPanel.setAttribute('style', 'display: block;');
+    infoPanel.textContent = 'Press E to play videos if stuck, A and D to rotate videos';
+    statusIndicator.onclick = () => {
+        let info = document.getElementById("SQT-info");
+        if (info == null) {
+            let overlay = document.getElementById("modal-overlay");
+            overlay.prepend(infoPanel);
+        } else {
+            if (info.style.display == "block")
+                info.style.display = "none";
+            else
+                info.style.display = "block";
+        }
+    }
 })();
